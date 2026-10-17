@@ -358,7 +358,7 @@ Panel {
         Text {
           visible: root.lastError !== ""
           width: parent.width
-          wrapMode: Text.Wrap
+          wrapMode: Text.WrapAtWordBoundaryOrAnywhere
           textFormat: Text.PlainText
           text: root.lastError
           color: Color.accent

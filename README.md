@@ -12,9 +12,15 @@ omarchy plugin add <git-url> --enable
 ~/.config/omarchy/plugins/dylan.aorus-fan/install-udev.sh
 ```
 
-Changing profiles needs write access to the cooler's hidraw node, which takes a udev rule
-and therefore root, once; `install-udev.sh` installs it (it asks for `sudo`). Without the
-rule the panel still shows status and reports "No permission" on a change.
+### Why a udev rule
+
+Reading status works out of the box. Changing a profile means writing raw HID reports to the
+cooler's `/dev/hidraw*` node, which is root-only by default, and the `gigabyte_waterforce`
+kernel driver is read-only. `install-udev.sh` installs one two-line rule
+(`70-waterforce.rules`) that tags only this device (USB `1044:7a4d`) with `uaccess`, so the
+logged-in user, and nobody else, can write to it. It asks for `sudo` once; read the script and
+the rule first if you like. Without it the panel still shows status, and a profile change
+shows the exact command to run.
 
 ## Settings (`shell.json` entry)
 

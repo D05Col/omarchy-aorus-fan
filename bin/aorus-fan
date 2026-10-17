@@ -186,7 +186,8 @@ def apply_modes(fan, pump):
             time.sleep(0.02)
             f.write(pkt(0xB6))
     except PermissionError:
-        raise FanError(f"No permission for {path}; install the udev rule (see README)")
+        script = os.path.join(os.path.dirname(os.path.dirname(os.path.realpath(__file__))), "install-udev.sh")
+        raise FanError(f"No permission for {path}. Run once to install the udev rule: {script}")
     except OSError as e:
         raise FanError(f"Failed writing to {path}: {e}")
 
