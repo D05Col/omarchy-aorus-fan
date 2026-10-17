@@ -1,2 +1,0 @@
-# Gigabyte AORUS WATERFORCE X: give the logged-in user access to the cooler's hidraw node.
-SUBSYSTEM=="hidraw", ATTRS{idVendor}=="1044", ATTRS{idProduct}=="7a4d", TAG+="uaccess"

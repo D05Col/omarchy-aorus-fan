@@ -11,12 +11,16 @@ Panel {
 
   // All device logic lives in the bundled CLI; this file is only the UI.
   readonly property string cli: Qt.resolvedUrl("bin/aorus-fan").toString().replace("file://", "")
-  readonly property string udevInstaller: Qt.resolvedUrl("install-udev.sh").toString().replace("file://", "")
+  // Run as root through pkexec, so the polkit dialog shows exactly what is written.
+  // Keep in sync with the udev rule in the README.
+  readonly property string udevRule: 'SUBSYSTEM=="hidraw", ATTRS{idVendor}=="1044", ATTRS{idProduct}=="7a4d", TAG+="uaccess"'
+  readonly property string udevInstallScript: 'printf "%s\\n" "$1" > /etc/udev/rules.d/70-waterforce.rules'
+    + ' && udevadm control --reload-rules && udevadm trigger --subsystem-match=hidraw --action=change'
   readonly property var fanModes: [
     { id: "zero", label: "Zero", icon: "󰤄", desc: "Fans off (0 RPM)" },
     { id: "quiet", label: "Quiet", icon: "󰒲", desc: "Gentle low-noise curve" },
     { id: "balance", label: "Balance", icon: "󰗑", desc: "Balanced curve" },
-    { id: "default", label: "Default", icon: "󰒓", desc: "Firmware default (runs 100% on this unit)" },
+    { id: "default", label: "Default", icon: "󰒓", desc: "Firmware default curve (may run at full speed)" },
     { id: "performance", label: "Performance", icon: "󰓅", desc: "Aggressive curve" },
     { id: "max", label: "Max", icon: "󱐋", desc: "Fans at 100%" }
   ]
@@ -26,12 +30,14 @@ Panel {
   ]
   readonly property bool restoreOnStart: setting("restoreOnStart", true) === true
 
-  property bool connected: true
+  property bool connected: false
   property bool writable: true
   property var telemetry: null
   property string fanMode: ""
   property string pumpMode: ""
   property string lastError: ""
+  property string statusError: ""
+  property bool refreshQueued: false
   property int modeIndex: 0
   property bool cursorActive: false
 
@@ -40,29 +46,40 @@ Panel {
     return ""
   }
 
+  // A request made while a poll is in flight reruns it, so a stale result cannot stick.
   function refresh() {
-    if (!statusProc.running) statusProc.running = true
+    if (statusProc.running) refreshQueued = true
+    else statusProc.running = true
   }
 
-  function applyStatus(raw) {
-    try {
-      var s = JSON.parse(raw)
-      connected = s.connected === true
-      writable = s.writable !== false
-      telemetry = s.telemetry || null
-      fanMode = s.fan_mode || ""
-      pumpMode = s.pump_mode || ""
-    } catch (e) {}
+  function applyStatus(raw, err, code) {
+    var s = null
+    if (code !== 0) statusError = err.trim() || "aorus-fan exited with code " + code
+    else {
+      try {
+        s = JSON.parse(raw)
+        statusError = ""
+      } catch (e) {
+        statusError = "Unexpected output from aorus-fan"
+      }
+    }
+    connected = s !== null && s.connected === true
+    writable = s === null || s.writable !== false
+    telemetry = s && s.telemetry ? s.telemetry : null
+    fanMode = s && s.fan_mode ? s.fan_mode : ""
+    pumpMode = s && s.pump_mode ? s.pump_mode : ""
   }
 
+  // Pass only what changed; the CLI fills in the other channel from the saved profile.
   function setProfile(fan, pump) {
     if (setProc.running) return
     // Show the choice immediately; the status poll after the write confirms it.
     if (fan) fanMode = fan
     if (pump) pumpMode = pump
     lastError = ""
-    var cmd = ["python3", cli, "set", fan || fanMode || "balance"]
-    if (pump || pumpMode) cmd.push("--pump", pump || pumpMode)
+    var cmd = ["python3", cli, "set"]
+    if (fan) cmd.push(fan)
+    if (pump) cmd.push("--pump", pump)
     setProc.command = cmd
     setProc.running = true
   }
@@ -73,15 +90,28 @@ Panel {
     authProc.running = true
   }
 
+  // Keyboard cursor: 0-5 are the fan grid (3 columns), 6-7 the pump row below it.
   function selectByDelta(delta) {
-    var n = fanModes.length
+    var n = fanModes.length + pumpModes.length
     modeIndex = (modeIndex + delta + n) % n
   }
 
-  function activateSelected() {
-    setProfile(fanModes[modeIndex].id, "")
+  function selectByRow(dy) {
+    var fanCount = fanModes.length
+    if (modeIndex < fanCount) {
+      if (dy < 0 && modeIndex >= 3) modeIndex -= 3
+      else if (dy > 0) modeIndex = modeIndex < 3 ? modeIndex + 3 : fanCount + (modeIndex === fanCount - 1 ? 1 : 0)
+    } else if (dy < 0) {
+      modeIndex = modeIndex === fanCount ? 3 : fanCount - 1
+    }
   }
 
+  function activateSelected() {
+    if (modeIndex < fanModes.length) setProfile(fanModes[modeIndex].id, "")
+    else setProfile("", pumpModes[modeIndex - fanModes.length].id)
+  }
+
+  readonly property string shownError: lastError !== "" ? lastError : statusError
   readonly property var cpuTemp: telemetry && telemetry.cpu_temp !== null ? telemetry.cpu_temp : null
 
   readonly property string tooltip: {
@@ -116,7 +146,15 @@ Panel {
   Process {
     id: statusProc
     command: ["python3", root.cli, "status", "--json"]
-    stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.applyStatus(text) }
+    stdout: StdioCollector { id: statusOut; waitForEnd: true }
+    stderr: StdioCollector { id: statusErr; waitForEnd: true }
+    onExited: function(code) {
+      root.applyStatus(statusOut.text, statusErr.text, code)
+      if (root.refreshQueued) {
+        root.refreshQueued = false
+        running = true
+      }
+    }
   }
 
   Process {
@@ -132,12 +170,12 @@ Panel {
 
   Process {
     id: authProc
-    command: ["pkexec", root.udevInstaller]
+    command: ["pkexec", "/bin/sh", "-c", root.udevInstallScript, "sh", root.udevRule]
     stderr: StdioCollector { id: authErr; waitForEnd: true }
     onExited: function(code) {
       // pkexec exits 126/127 when the password prompt is dismissed or refused.
-      if (code === 126 || code === 127) root.lastError = "Authorization cancelled"
-      else if (code !== 0) root.lastError = authErr.text.trim()
+      var err = authErr.text.trim()
+      if (code !== 0) root.lastError = err || (code === 126 || code === 127 ? "Authorization cancelled" : "Authorization failed (exit " + code + ")")
       root.refresh()
       settleTimer.restart()
     }
@@ -178,15 +216,13 @@ Panel {
       anchors.fill: parent
       onMoveRequested: function(dx, dy) {
         if (!root.cursorActive) { root.cursorActive = true; return }
-        // 3-column grid: left/right step by one, up/down by a row.
+        // Left/right step by one; up/down move between the fan rows and the pump row.
         if (dx !== 0) root.selectByDelta(dx)
-        else if (dy !== 0) {
-          var next = root.modeIndex + dy * 3
-          if (next >= 0 && next < root.fanModes.length) root.modeIndex = next
-        }
+        else if (dy !== 0) root.selectByRow(dy)
       }
       onActivateRequested: {
-        if (root.connected && !root.writable) root.authorize()
+        if (!root.connected) return
+        if (!root.writable) root.authorize()
         else if (root.cursorActive) root.activateSelected()
       }
       onCloseRequested: root.close()
@@ -282,7 +318,7 @@ Panel {
           }
         }
 
-        PanelSeparator { foreground: root.bar.foreground }
+        PanelSeparator { visible: root.connected; foreground: root.bar.foreground }
 
         // ---------- Access ----------
         Column {
@@ -319,7 +355,7 @@ Panel {
 
         // ---------- Fan profile ----------
         Column {
-          visible: root.writable || !root.connected
+          visible: root.connected && root.writable
           width: parent.width
           spacing: Style.space(10)
 
@@ -367,8 +403,8 @@ Panel {
           Text {
             width: parent.width
             textFormat: Text.PlainText
-            text: root.fanModes[root.modeIndex].desc
-            visible: root.cursorActive
+            text: root.modeIndex < root.fanModes.length ? root.fanModes[root.modeIndex].desc : ""
+            visible: root.cursorActive && text !== ""
             color: root.bar.foreground
             opacity: 0.6
             font.family: root.bar.fontFamily
@@ -376,11 +412,11 @@ Panel {
           }
         }
 
-        PanelSeparator { visible: root.writable || !root.connected; foreground: root.bar.foreground }
+        PanelSeparator { visible: root.connected && root.writable; foreground: root.bar.foreground }
 
         // ---------- Pump profile ----------
         Column {
-          visible: root.writable || !root.connected
+          visible: root.connected && root.writable
           width: parent.width
           spacing: Style.space(10)
 
@@ -400,6 +436,7 @@ Panel {
               model: root.pumpModes
               Button {
                 required property var modelData
+                required property int index
                 width: pumpRow.cellWidth
                 text: modelData.label
                 fontSize: Style.font.bodySmall
@@ -409,18 +446,25 @@ Panel {
                 verticalPadding: Style.spacing.controlPaddingY + Style.space(2)
                 bordered: true
                 active: root.pumpMode === modelData.id
+                hasCursor: root.cursorActive && root.modeIndex === root.fanModes.length + index
                 onClicked: root.setProfile("", modelData.id)
+                onHovered: function(h) {
+                  if (h) {
+                    root.cursorActive = true
+                    root.modeIndex = root.fanModes.length + index
+                  }
+                }
               }
             }
           }
         }
 
         Text {
-          visible: root.lastError !== ""
+          visible: root.shownError !== ""
           width: parent.width
           wrapMode: Text.WrapAtWordBoundaryOrAnywhere
           textFormat: Text.PlainText
-          text: root.lastError
+          text: root.shownError
           color: Color.accent
           font.family: root.bar.fontFamily
           font.pixelSize: Style.font.bodySmall

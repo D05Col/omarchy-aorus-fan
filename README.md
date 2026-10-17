@@ -3,7 +3,7 @@
 Bar widget for the Gigabyte AORUS WATERFORCE X AIO (X240/X280/X360, USB `1044:7a4d`).
 Click the fan icon to pick a fan profile (Zero, Quiet, Balance, Default, Performance, Max)
 and a pump profile (Balance, Max), with live fan/pump RPM, coolant and CPU temperature.
-Keyboard: arrows move, Enter applies, Esc closes.
+Keyboard: arrows move between the fan and pump buttons, Enter applies, Esc closes.
 
 ## Install
 
@@ -15,13 +15,26 @@ Reading status works out of the box. Changing a profile means writing raw HID re
 cooler's `/dev/hidraw*` node, which is root-only by default, and the `gigabyte_waterforce`
 kernel driver is read-only. Until that is set up, the panel shows an **Authorize fan control**
 button instead of the profile buttons. Clicking it (or pressing Enter) asks for your password
-through polkit and runs `install-udev.sh`, which installs one two-line rule
-(`70-waterforce.rules`) that tags only this device (USB `1044:7a4d`) with `uaccess`, so the
-logged-in user, and nobody else, can write to it. It is a one-time step and the button goes
-away afterwards. Read the script and the rule first if you like.
+through polkit and runs one short `sh -c` command as root: it writes the udev rule below to
+`/etc/udev/rules.d/70-waterforce.rules` and reloads udev. The command is fixed in
+`BarWidget.qml` and the polkit dialog shows it, so you can see what you are approving. The
+rule tags only this device (USB `1044:7a4d`) with `uaccess`, so the logged-in user, and nobody
+else, can write to it. It is a one-time step and the button goes away afterwards.
 
-From a terminal, run `~/.config/omarchy/plugins/dylan.aorus-fan/install-udev.sh` instead (it
-uses `sudo`).
+```
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="1044", ATTRS{idProduct}=="7a4d", TAG+="uaccess"
+```
+
+To do the same from a terminal:
+
+```bash
+echo 'SUBSYSTEM=="hidraw", ATTRS{idVendor}=="1044", ATTRS{idProduct}=="7a4d", TAG+="uaccess"' |
+  sudo tee /etc/udev/rules.d/70-waterforce.rules
+sudo udevadm control --reload-rules
+sudo udevadm trigger --subsystem-match=hidraw --action=change
+```
+
+The file name matters: `uaccess` rules must sort before `73-seat-late.rules`.
 
 ## Settings (`shell.json` entry)
 
@@ -38,6 +51,7 @@ ln -s ~/.config/omarchy/plugins/dylan.aorus-fan/bin/aorus-fan ~/.local/bin/aorus
 
 aorus-fan status [--json]            # RPM, duty, coolant and CPU temp, saved profile
 aorus-fan set quiet [--pump max]     # zero | quiet | balance | default | performance | max
+aorus-fan set --pump max             # change only the pump; the fan keeps its saved profile
 aorus-fan restore                    # re-apply the saved profile once per boot
 ```
 

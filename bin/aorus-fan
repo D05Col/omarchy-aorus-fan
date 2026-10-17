@@ -7,7 +7,7 @@ Uses the firmware's built-in profiles (HID 0xE5 per channel + 0xB6 commit).
 Never sends 0xE6 manual curves: they latch the firmware into Performance mode.
 
   aorus-fan status [--json]
-  aorus-fan set <zero|quiet|balance|default|performance|max> [--pump balance|max]
+  aorus-fan set [zero|quiet|balance|default|performance|max] [--pump balance|max]
   aorus-fan restore        re-apply the saved profile once per boot
 """
 
@@ -46,7 +46,7 @@ class FanError(Exception):
 
 
 def find_hidraw():
-    for p in sorted(glob.glob("/sys/class/hidraw/hidraw*")):
+    for p in sorted(glob.glob("/sys/class/hidraw/hidraw*"), key=lambda p: int(p.rsplit("hidraw", 1)[1])):
         try:
             if VID_PID in os.path.realpath(os.path.join(p, "device")).upper():
                 return "/dev/" + os.path.basename(p)
@@ -111,16 +111,18 @@ def status_hid():
         return None
     pkt = bytearray(REPORT_LEN)
     pkt[0], pkt[1] = REPORT_ID, 0xDA
+    deadline = time.monotonic() + 1.5
     try:
         with open(path, "r+b", buffering=0) as f:
             f.write(pkt)
-            ready, _, _ = select.select([f], [], [], 1.5)
-            if not ready:
-                return None
-            r = f.read(256)
+            while True:
+                ready, _, _ = select.select([f], [], [], max(0, deadline - time.monotonic()))
+                if not ready:
+                    return None
+                r = f.read(256)
+                if len(r) >= 15 and r[0] == REPORT_ID and r[1] == 0xDA:
+                    break
     except OSError:
-        return None
-    if len(r) < 15 or r[0] != REPORT_ID:
         return None
     return {
         "fan_rpm": r[2] | (r[3] << 8),
@@ -132,11 +134,18 @@ def status_hid():
 
 
 def load_state():
+    """Saved profile and boot id; anything missing or unrecognised is dropped."""
     try:
         with open(STATE_FILE) as f:
-            return json.load(f)
+            raw = json.load(f)
     except (OSError, ValueError):
         return {}
+    if not isinstance(raw, dict):
+        return {}
+    state = {k: raw[k] for k in ("fan", "pump") if raw.get(k) in (FAN_MODES if k == "fan" else PUMP_MODES)}
+    if isinstance(raw.get("boot_id"), str):
+        state["boot_id"] = raw["boot_id"]
+    return state
 
 
 def save_state(state):
@@ -186,8 +195,7 @@ def apply_modes(fan, pump):
             time.sleep(0.02)
             f.write(pkt(0xB6))
     except PermissionError:
-        script = os.path.join(os.path.dirname(os.path.dirname(os.path.realpath(__file__))), "install-udev.sh")
-        raise FanError(f"No permission for {path}. Run once to install the udev rule: {script}")
+        raise FanError(f"No permission for {path}. Click Authorize in the panel, or install the udev rule from the README.")
     except OSError as e:
         raise FanError(f"Failed writing to {path}: {e}")
 
@@ -221,10 +229,14 @@ def cmd_status(args):
 
 def cmd_set(args):
     with Lock():
-        pump = args.pump or load_state().get("pump", "balance")
-        apply_modes(args.mode, pump)
-        save_state({"fan": args.mode, "pump": pump, "boot_id": boot_id()})
-    print(f"fan={args.mode} pump={pump}")
+        state = load_state()
+        fan = args.mode or state.get("fan")
+        if not fan:
+            raise FanError("No fan profile saved yet; choose one first")
+        pump = args.pump or state.get("pump", "balance")
+        apply_modes(fan, pump)
+        save_state({"fan": fan, "pump": pump, "boot_id": boot_id()})
+    print(f"fan={fan} pump={pump}")
     return 0
 
 
@@ -232,9 +244,7 @@ def cmd_restore(_args):
     with Lock():
         state = load_state()
         fan, pump = state.get("fan"), state.get("pump", "balance")
-        if fan not in FAN_MODES or pump not in PUMP_MODES:
-            return 0
-        if state.get("boot_id") == boot_id():
+        if not fan or state.get("boot_id") == boot_id():
             return 0
         apply_modes(fan, pump)
         state["boot_id"] = boot_id()
@@ -252,7 +262,7 @@ def main():
     p.set_defaults(fn=cmd_status)
 
     p = sub.add_parser("set")
-    p.add_argument("mode", choices=list(FAN_MODES))
+    p.add_argument("mode", nargs="?", choices=list(FAN_MODES))
     p.add_argument("--pump", choices=list(PUMP_MODES))
     p.set_defaults(fn=cmd_set)
 
