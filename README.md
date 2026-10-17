@@ -1,5 +1,7 @@
 # AORUS Fan Control (Omarchy plugin)
 
+![The AORUS Fan Control panel](preview.png)
+
 Bar widget for the Gigabyte AORUS WATERFORCE X AIO (X240/X280/X360, USB `1044:7a4d`).
 Click the fan icon to pick a fan profile (Zero, Quiet, Balance, Default, Performance, Max)
 and a pump profile (Balance, Max), with live fan/pump RPM, coolant and CPU temperature.
