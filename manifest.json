@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "id": "dylan.aorus-fan",
+  "name": "AORUS Fan Control",
+  "version": "1.0.0",
+  "author": "Dylan Collins",
+  "license": "MIT",
+  "description": "Pick the fan and pump profile of a Gigabyte AORUS WATERFORCE X AIO cooler from the bar, with live RPM and coolant temperature.",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "AORUS Fan",
+    "description": "Fan and pump profile selector for the AORUS WATERFORCE X AIO.",
+    "category": "System",
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "restoreOnStart": true
+    },
+    "schema": [
+      {
+        "key": "restoreOnStart",
+        "type": "boolean",
+        "label": "Re-apply last profile once per boot"
+      }
+    ]
+  }
+}

@@ -1,0 +1,267 @@
+#!/usr/bin/env python3
+"""aorus-fan: set the hardware fan/pump profile of a Gigabyte AORUS WATERFORCE X AIO.
+
+Backend for the dylan.aorus-fan Omarchy plugin. Standard library only.
+
+Uses the firmware's built-in profiles (HID 0xE5 per channel + 0xB6 commit).
+Never sends 0xE6 manual curves: they latch the firmware into Performance mode.
+
+  aorus-fan status [--json]
+  aorus-fan set <zero|quiet|balance|default|performance|max> [--pump balance|max]
+  aorus-fan restore        re-apply the saved profile once per boot
+"""
+
+import argparse
+import fcntl
+import glob
+import json
+import os
+import select
+import sys
+import time
+
+VID_PID = "1044:7A4D"
+REPORT_LEN = 6144
+REPORT_ID = 0x99
+
+FAN_MODES = {
+    "zero": 0x07,
+    "quiet": 0x06,
+    "balance": 0x00,
+    "default": 0x02,
+    "performance": 0x05,
+    "max": 0x04,
+}
+PUMP_MODES = {"balance": 0x00, "max": 0x04}
+
+STATE_DIR = os.path.join(
+    os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state"), "aorus-fan"
+)
+STATE_FILE = os.path.join(STATE_DIR, "state.json")
+LOCK_FILE = os.path.join(STATE_DIR, "lock")
+
+
+class FanError(Exception):
+    pass
+
+
+def find_hidraw():
+    for p in sorted(glob.glob("/sys/class/hidraw/hidraw*")):
+        try:
+            if VID_PID in os.path.realpath(os.path.join(p, "device")).upper():
+                return "/dev/" + os.path.basename(p)
+        except OSError:
+            pass
+    return None
+
+
+def find_hwmon():
+    for p in sorted(glob.glob("/sys/class/hwmon/hwmon*")):
+        try:
+            with open(os.path.join(p, "name")) as f:
+                if f.read().strip() == "waterforce":
+                    return p
+        except OSError:
+            pass
+    return None
+
+
+def read_int(path):
+    with open(path) as f:
+        return int(f.read().strip())
+
+
+def cpu_temp():
+    """CPU die temperature in °C: AMD Tctl (k10temp) or Intel package (coretemp)."""
+    for p in sorted(glob.glob("/sys/class/hwmon/hwmon*")):
+        try:
+            with open(os.path.join(p, "name")) as f:
+                name = f.read().strip()
+            if name not in ("k10temp", "coretemp", "zenpower"):
+                continue
+            for lbl in sorted(glob.glob(os.path.join(p, "temp*_label"))):
+                with open(lbl) as f:
+                    if f.read().strip() in ("Tctl", "Tdie", "Package id 0"):
+                        return read_int(lbl.replace("_label", "_input")) / 1000.0
+            return read_int(os.path.join(p, "temp1_input")) / 1000.0
+        except (OSError, ValueError):
+            pass
+    return None
+
+
+def status_hwmon():
+    hw = find_hwmon()
+    if not hw:
+        return None
+    try:
+        return {
+            "fan_rpm": read_int(f"{hw}/fan1_input"),
+            "pump_rpm": read_int(f"{hw}/fan2_input"),
+            "fan_duty": round(read_int(f"{hw}/pwm1") * 100 / 255),
+            "pump_duty": round(read_int(f"{hw}/pwm2") * 100 / 255),
+            "temp": read_int(f"{hw}/temp1_input") / 1000.0,
+        }
+    except (OSError, ValueError):
+        return None
+
+
+def status_hid():
+    path = find_hidraw()
+    if not path:
+        return None
+    pkt = bytearray(REPORT_LEN)
+    pkt[0], pkt[1] = REPORT_ID, 0xDA
+    try:
+        with open(path, "r+b", buffering=0) as f:
+            f.write(pkt)
+            ready, _, _ = select.select([f], [], [], 1.5)
+            if not ready:
+                return None
+            r = f.read(256)
+    except OSError:
+        return None
+    if len(r) < 15 or r[0] != REPORT_ID:
+        return None
+    return {
+        "fan_rpm": r[2] | (r[3] << 8),
+        "pump_rpm": r[5] | (r[6] << 8),
+        "fan_duty": r[8],
+        "pump_duty": r[9],
+        "temp": r[13] + r[14] / 10.0,
+    }
+
+
+def load_state():
+    try:
+        with open(STATE_FILE) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def save_state(state):
+    os.makedirs(STATE_DIR, exist_ok=True)
+    tmp = STATE_FILE + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(state, f)
+    os.replace(tmp, STATE_FILE)
+
+
+def boot_id():
+    try:
+        with open("/proc/sys/kernel/random/boot_id") as f:
+            return f.read().strip()
+    except OSError:
+        return ""
+
+
+class Lock:
+    def __enter__(self):
+        os.makedirs(STATE_DIR, exist_ok=True)
+        self.f = open(LOCK_FILE, "w")
+        fcntl.flock(self.f, fcntl.LOCK_EX)
+        return self
+
+    def __exit__(self, *exc):
+        self.f.close()
+
+
+def apply_modes(fan, pump):
+    path = find_hidraw()
+    if not path:
+        raise FanError("Waterforce cooler (USB 1044:7a4d) not found")
+
+    def pkt(*head):
+        b = bytearray(REPORT_LEN)
+        b[0] = REPORT_ID
+        for i, v in enumerate(head, 1):
+            b[i] = v
+        return b
+
+    try:
+        with open(path, "r+b", buffering=0) as f:
+            f.write(pkt(0xE5, 0x01, FAN_MODES[fan]))
+            time.sleep(0.02)
+            f.write(pkt(0xE5, 0x02, PUMP_MODES[pump]))
+            time.sleep(0.02)
+            f.write(pkt(0xB6))
+    except PermissionError:
+        raise FanError(f"No permission for {path}; install the udev rule (see README)")
+    except OSError as e:
+        raise FanError(f"Failed writing to {path}: {e}")
+
+
+def cmd_status(args):
+    st = status_hwmon() or status_hid()
+    if st:
+        st["cpu_temp"] = cpu_temp()
+    state = load_state()
+    out = {
+        "connected": find_hidraw() is not None,
+        "fan_mode": state.get("fan"),
+        "pump_mode": state.get("pump"),
+        "telemetry": st,
+    }
+    if args.json:
+        print(json.dumps(out))
+    elif st:
+        print(f"Fan:   {st['fan_rpm']} RPM ({st['fan_duty']}%)  profile: {out['fan_mode'] or 'unknown'}")
+        print(f"Pump:  {st['pump_rpm']} RPM ({st['pump_duty']}%)  profile: {out['pump_mode'] or 'unknown'}")
+        print(f"Coolant: {st['temp']:.1f} °C")
+        if st["cpu_temp"] is not None:
+            print(f"CPU:     {st['cpu_temp']:.1f} °C")
+    else:
+        print("Cooler not detected.", file=sys.stderr)
+        return 1
+    return 0
+
+
+def cmd_set(args):
+    with Lock():
+        pump = args.pump or load_state().get("pump", "balance")
+        apply_modes(args.mode, pump)
+        save_state({"fan": args.mode, "pump": pump, "boot_id": boot_id()})
+    print(f"fan={args.mode} pump={pump}")
+    return 0
+
+
+def cmd_restore(_args):
+    with Lock():
+        state = load_state()
+        fan, pump = state.get("fan"), state.get("pump", "balance")
+        if fan not in FAN_MODES or pump not in PUMP_MODES:
+            return 0
+        if state.get("boot_id") == boot_id():
+            return 0
+        apply_modes(fan, pump)
+        state["boot_id"] = boot_id()
+        save_state(state)
+    print(f"restored fan={fan} pump={pump}")
+    return 0
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = ap.add_subparsers(dest="cmd", required=True)
+
+    p = sub.add_parser("status")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(fn=cmd_status)
+
+    p = sub.add_parser("set")
+    p.add_argument("mode", choices=list(FAN_MODES))
+    p.add_argument("--pump", choices=list(PUMP_MODES))
+    p.set_defaults(fn=cmd_set)
+
+    sub.add_parser("restore").set_defaults(fn=cmd_restore)
+
+    args = ap.parse_args()
+    try:
+        sys.exit(args.fn(args))
+    except FanError as e:
+        print(f"aorus-fan: {e}", file=sys.stderr)
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
