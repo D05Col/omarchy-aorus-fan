@@ -2,10 +2,24 @@
 
 ![The AORUS Fan Control panel](preview.png)
 
-Bar widget for the Gigabyte AORUS WATERFORCE X AIO (X240/X280/X360, USB `1044:7a4d`).
+Bar widget for the Gigabyte AORUS WATERFORCE X AIO cooler (USB `1044:7a4d`).
 Click the fan icon to pick a fan profile (Zero, Quiet, Balance, Default, Performance, Max)
 and a pump profile (Balance, Max), with live fan/pump RPM, coolant and CPU temperature.
 Keyboard: arrows move between the fan and pump buttons, Enter applies, Esc closes.
+
+## Supported hardware
+
+| Cooler | USB ID | Status |
+|---|---|---|
+| AORUS WATERFORCE X 360 | `1044:7a4d` | Tested by the maintainer |
+
+That is the only cooler this has been verified on. Other WATERFORCE X models, or anything else
+that reports the same USB ID, may work, but nobody has confirmed it. If you have one, please
+test it and open a [hardware report](https://github.com/D05Col/omarchy-aorus-fan/issues/new?template=hardware-report.yml) with what you
+see. Reports that work get added to the table above; reports that don't help find what differs.
+
+To test, run `lsusb | grep 1044`, then `aorus-fan status --json` (see [CLI](#cli)), then try each
+fan and pump profile and check the RPM follows.
 
 ## Install
 
@@ -37,6 +51,18 @@ sudo udevadm trigger --subsystem-match=hidraw --action=change
 ```
 
 The file name matters: `uaccess` rules must sort before `73-seat-late.rules`.
+
+## Uninstall
+
+```bash
+omarchy plugin remove dylan.aorus-fan
+sudo rm /etc/udev/rules.d/70-waterforce.rules
+sudo udevadm control --reload-rules
+rm -rf ~/.local/state/aorus-fan
+```
+
+Your write access to the cooler stays until the cooler is replugged or the machine reboots,
+because udev does not strip an already-applied permission when a rule is removed.
 
 ## Settings (`shell.json` entry)
 
@@ -70,7 +96,7 @@ running, so telemetry is read from its hwmon device, falling back to the status 
 - Fan codes: `0x07` zero, `0x06` quiet, `0x00` balance, `0x02` default, `0x05` performance,
   `0x04` max. Pump: `0x00` balance, `0x04` max.
 - Do not send `0xE6` manual curves: the firmware latches into ~88% duty (Performance).
-- Measured on one X360 at 26 °C coolant, ~50 °C CPU: quiet 56% (~1,450 RPM), balance 72%
+- Measured on one WATERFORCE X 360 at 26 °C coolant, ~50 °C CPU: quiet 56% (~1,450 RPM), balance 72%
   (~1,800), performance 88% (~2,270), max and default 100% (~2,600). `default` is not a
   gentle curve on this unit.
 

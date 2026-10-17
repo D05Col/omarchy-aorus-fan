@@ -5,7 +5,7 @@
   "version": "1.0.0",
   "author": "Dylan Collins",
   "license": "MIT",
-  "description": "Pick the fan and pump profile of a Gigabyte AORUS WATERFORCE X AIO cooler from the bar, with live RPM and coolant temperature.",
+  "description": "Pick the fan and pump profile of a Gigabyte AORUS WATERFORCE X AIO cooler from the bar, with live RPM and coolant temperature. Tested on the X 360.",
   "kinds": [
     "bar-widget"
   ],
@@ -14,7 +14,7 @@
   },
   "barWidget": {
     "displayName": "AORUS Fan",
-    "description": "Fan and pump profile selector for the AORUS WATERFORCE X AIO.",
+    "description": "Fan and pump profile selector for the AORUS WATERFORCE X AIO (tested on the X 360).",
     "category": "System",
     "allowMultiple": false,
     "defaultSection": "right",

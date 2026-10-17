@@ -1,0 +1,44 @@
+name: Hardware report
+description: Tell us whether the plugin works on your cooler
+labels: [hardware]
+body:
+  - type: input
+    id: model
+    attributes:
+      label: Cooler model
+      placeholder: AORUS WATERFORCE X 280
+    validations:
+      required: true
+  - type: textarea
+    id: lsusb
+    attributes:
+      label: "`lsusb | grep 1044`"
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: status
+    attributes:
+      label: "`aorus-fan status --json`"
+      render: json
+    validations:
+      required: true
+  - type: checkboxes
+    id: worked
+    attributes:
+      label: What worked
+      description: Tick only what you checked.
+      options:
+        - label: Fan and pump RPM show in the panel
+        - label: Fan profiles change the fan RPM
+        - label: Pump profiles change the pump RPM
+        - label: Authorize fan control installs the udev rule
+  - type: input
+    id: omarchy
+    attributes:
+      label: Omarchy version
+      placeholder: output of `omarchy version`
+  - type: textarea
+    id: notes
+    attributes:
+      label: Anything else

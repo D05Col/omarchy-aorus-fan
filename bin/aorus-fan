@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""aorus-fan: set the hardware fan/pump profile of a Gigabyte AORUS WATERFORCE X AIO.
+"""aorus-fan: set the hardware fan/pump profile of a Gigabyte AORUS WATERFORCE X AIO (tested on the X 360).
 
 Backend for the dylan.aorus-fan Omarchy plugin. Standard library only.
 
