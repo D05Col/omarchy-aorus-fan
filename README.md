@@ -9,18 +9,19 @@ Keyboard: arrows move, Enter applies, Esc closes.
 
 ```bash
 omarchy plugin add <git-url> --enable
-~/.config/omarchy/plugins/dylan.aorus-fan/install-udev.sh
 ```
-
-### Why a udev rule
 
 Reading status works out of the box. Changing a profile means writing raw HID reports to the
 cooler's `/dev/hidraw*` node, which is root-only by default, and the `gigabyte_waterforce`
-kernel driver is read-only. `install-udev.sh` installs one two-line rule
+kernel driver is read-only. Until that is set up, the panel shows an **Authorize fan control**
+button instead of the profile buttons. Clicking it (or pressing Enter) asks for your password
+through polkit and runs `install-udev.sh`, which installs one two-line rule
 (`70-waterforce.rules`) that tags only this device (USB `1044:7a4d`) with `uaccess`, so the
-logged-in user, and nobody else, can write to it. It asks for `sudo` once; read the script and
-the rule first if you like. Without it the panel still shows status, and a profile change
-shows the exact command to run.
+logged-in user, and nobody else, can write to it. It is a one-time step and the button goes
+away afterwards. Read the script and the rule first if you like.
+
+From a terminal, run `~/.config/omarchy/plugins/dylan.aorus-fan/install-udev.sh` instead (it
+uses `sudo`).
 
 ## Settings (`shell.json` entry)
 

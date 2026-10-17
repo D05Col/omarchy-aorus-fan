@@ -197,8 +197,10 @@ def cmd_status(args):
     if st:
         st["cpu_temp"] = cpu_temp()
     state = load_state()
+    path = find_hidraw()
     out = {
-        "connected": find_hidraw() is not None,
+        "connected": path is not None,
+        "writable": path is not None and os.access(path, os.W_OK),
         "fan_mode": state.get("fan"),
         "pump_mode": state.get("pump"),
         "telemetry": st,

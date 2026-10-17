@@ -11,6 +11,7 @@ Panel {
 
   // All device logic lives in the bundled CLI; this file is only the UI.
   readonly property string cli: Qt.resolvedUrl("bin/aorus-fan").toString().replace("file://", "")
+  readonly property string udevInstaller: Qt.resolvedUrl("install-udev.sh").toString().replace("file://", "")
   readonly property var fanModes: [
     { id: "zero", label: "Zero", icon: "󰤄", desc: "Fans off (0 RPM)" },
     { id: "quiet", label: "Quiet", icon: "󰒲", desc: "Gentle low-noise curve" },
@@ -26,6 +27,7 @@ Panel {
   readonly property bool restoreOnStart: setting("restoreOnStart", true) === true
 
   property bool connected: true
+  property bool writable: true
   property var telemetry: null
   property string fanMode: ""
   property string pumpMode: ""
@@ -46,6 +48,7 @@ Panel {
     try {
       var s = JSON.parse(raw)
       connected = s.connected === true
+      writable = s.writable !== false
       telemetry = s.telemetry || null
       fanMode = s.fan_mode || ""
       pumpMode = s.pump_mode || ""
@@ -62,6 +65,12 @@ Panel {
     if (pump || pumpMode) cmd.push("--pump", pump || pumpMode)
     setProc.command = cmd
     setProc.running = true
+  }
+
+  function authorize() {
+    if (authProc.running) return
+    lastError = ""
+    authProc.running = true
   }
 
   function selectByDelta(delta) {
@@ -122,6 +131,19 @@ Panel {
   }
 
   Process {
+    id: authProc
+    command: ["pkexec", root.udevInstaller]
+    stderr: StdioCollector { id: authErr; waitForEnd: true }
+    onExited: function(code) {
+      // pkexec exits 126/127 when the password prompt is dismissed or refused.
+      if (code === 126 || code === 127) root.lastError = "Authorization cancelled"
+      else if (code !== 0) root.lastError = authErr.text.trim()
+      root.refresh()
+      settleTimer.restart()
+    }
+  }
+
+  Process {
     id: restoreProc
     command: ["python3", root.cli, "restore"]
     onExited: root.refresh()
@@ -163,7 +185,10 @@ Panel {
           if (next >= 0 && next < root.fanModes.length) root.modeIndex = next
         }
       }
-      onActivateRequested: if (root.cursorActive) root.activateSelected()
+      onActivateRequested: {
+        if (root.connected && !root.writable) root.authorize()
+        else if (root.cursorActive) root.activateSelected()
+      }
       onCloseRequested: root.close()
       onTabRequested: function(direction) { root.switchPanel(direction) }
 
@@ -259,8 +284,42 @@ Panel {
 
         PanelSeparator { foreground: root.bar.foreground }
 
+        // ---------- Access ----------
+        Column {
+          visible: root.connected && !root.writable
+          width: parent.width
+          spacing: Style.space(8)
+
+          Button {
+            width: parent.width
+            iconText: "󰒃"
+            iconSize: Style.font.title
+            text: authProc.running ? "Authorizing…" : "Authorize fan control"
+            fontSize: Style.font.bodySmall
+            foreground: root.bar.foreground
+            fontFamily: root.bar.fontFamily
+            horizontalPadding: Style.spacing.controlPaddingX
+            verticalPadding: Style.spacing.controlPaddingY + Style.space(2)
+            bordered: true
+            hasCursor: true
+            onClicked: root.authorize()
+          }
+
+          Text {
+            width: parent.width
+            wrapMode: Text.Wrap
+            textFormat: Text.PlainText
+            text: "Allow this user to change fan and pump profiles. Installs a udev rule for the cooler and asks for your password."
+            color: root.bar.foreground
+            opacity: 0.6
+            font.family: root.bar.fontFamily
+            font.pixelSize: Style.font.bodySmall
+          }
+        }
+
         // ---------- Fan profile ----------
         Column {
+          visible: root.writable || !root.connected
           width: parent.width
           spacing: Style.space(10)
 
@@ -317,10 +376,11 @@ Panel {
           }
         }
 
-        PanelSeparator { foreground: root.bar.foreground }
+        PanelSeparator { visible: root.writable || !root.connected; foreground: root.bar.foreground }
 
         // ---------- Pump profile ----------
         Column {
+          visible: root.writable || !root.connected
           width: parent.width
           spacing: Style.space(10)
 
